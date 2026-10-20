@@ -22,7 +22,7 @@ go test -count=1 -p=4 -parallel=4 -timeout=20m -v ./...
 
 Omit the permission flags for read-only checks. Tests clean up their resources. Set `STEVE_TOKEN` if authentication is required; use `STEVE_CA_FILE` for a private CA or `STEVE_INSECURE_SKIP_VERIFY=true` for a local self-signed endpoint. `STEVE_URL` can override the configured endpoint.
 
-Set `STEVE_VERSION` to the target release for local tests; GitHub Actions already supplies it. The ReplicaSet associated-data test skips known releases older than `v0.10.1`. Leave it unset for unknown or custom targets so assertions stay active.
+Set `STEVE_VERSION` for local runs to use version-specific expectations and skip unsupported features. GitHub Actions sets it automatically.
 
 In GoLand, select [**All Steve tests**](.run/All%20Steve%20tests.run.xml) and click Play. It uses `~/steve-config.yaml`, enables all test permissions, and shows individual results. The [TestAll](all_test.go) wrapper also runs the suite but appears as one test.
 
@@ -85,7 +85,8 @@ Create a private S3 bucket with S3-managed encryption and an IAM role using [Git
 
 Add the three AWS secrets and run **Check Steve Tags**. Repository policies must allow `id-token: write` and `actions: write`. Static AWS keys and a GitHub PAT are unnecessary.
 
-- Tracks the highest tag, including prereleases, for **0.9** and **0.10**. An empty cache dispatches both; later scans dispatch only changed tags. Edit `SUPPORTED_MINORS` to add a minor. Older releases are not backfilled.
+- Tracks the highest Steve tag, including prereleases, for each minor used by the **five newest Rancher release branches plus `main`**. Set the `RANCHER_RELEASE_LINES` repository variable to change the window (default `5`).
+- A minor without a cached tag dispatches on the next scan; later scans dispatch only changed tags. Shared Steve minors produce one dispatch. Older tags are not backfilled.
 - Always dispatches E2E runs from the repository's **default branch**.
 - Stores dispatched tags in `steve/<minor>.txt`; test artifacts stay in GitHub. Keep cache objects out of expiration policies. Failed tests need a manual retry; manual E2E runs do not update the cache.
 - Enable scheduled workflows in forks. If a fork and upstream use the same bucket and prefix, schedule discovery in only one.

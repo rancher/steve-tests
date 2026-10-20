@@ -23,6 +23,7 @@ const ingressSchemaID = "networking.k8s.io.ingress"
 // An Ingress with an omitted host must remain visible through GET and list.
 func TestHostlessIngressRemainsVisible(t *testing.T) {
 	t.Parallel()
+	actions.RequireSteveFeature(t, actions.SteveIngressMissingHost)
 	tests := []struct {
 		name  string
 		hosts []string
@@ -52,6 +53,7 @@ func TestHostlessIngressRemainsVisible(t *testing.T) {
 // Check exact array membership and indexed host queries using Steve's dotted array indexes.
 func TestIngressArrayFieldExactFilterAndIndexedSort(t *testing.T) {
 	t.Parallel()
+	actions.RequireSteveFeature(t, actions.SteveArrayElementIndexes)
 	cl := requireIngressSQLTarget(t)
 	namespace := actions.CreateTestNamespace(t, cl)
 	resources := cl.Resource(ingressSchemaID).Namespace(namespace)
@@ -75,12 +77,14 @@ func TestIngressArrayFieldExactFilterAndIndexedSort(t *testing.T) {
 		filters  []string
 		sort     string
 		expected []string
+		feature  actions.SteveFeature
 	}{
 		{
 			name:     "exact contains matches array members but not substrings",
 			filters:  []string{caseFilter, query.Contains("spec.rules.host", "alpha.example.test")},
 			sort:     "metadata.name",
 			expected: []string{"array-a", "array-b"},
+			feature:  actions.SteveArrayMembershipFilters,
 		},
 		{
 			name:     "first host dotted exact filter",
@@ -108,6 +112,9 @@ func TestIngressArrayFieldExactFilterAndIndexedSort(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			if test.feature != "" {
+				actions.RequireSteveFeature(t, test.feature)
+			}
 			values := make(url.Values)
 			for _, filter := range test.filters {
 				values.Add(query.FilterParam, filter)

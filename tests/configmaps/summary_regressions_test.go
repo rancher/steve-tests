@@ -30,10 +30,11 @@ type summaryCount struct {
 	Namespace map[string]int `json:"namespace,omitempty"`
 }
 
-// SQL summaries must preserve totals and per-namespace counts for each
-// summary-only option.
+// Versions with SQL summaries must preserve totals. Versions that support
+// summary options must also preserve per-namespace counts and omit data.
 func TestConfigMapSummaryOnlyAndNamespaced(t *testing.T) {
 	t.Parallel()
+	actions.RequireSteveFeature(t, actions.SteveBasicSummary)
 	cl := actions.RequireSQLMode(t).Client
 	firstNS := actions.CreateTestNamespace(t, cl)
 	secondNS := actions.CreateTestNamespace(t, cl)
@@ -62,23 +63,35 @@ func TestConfigMapSummaryOnlyAndNamespaced(t *testing.T) {
 		query.FilterParam:  {query.Equal("metadata.labels."+actions.CaseLabel, caseID)},
 		query.SummaryParam: {summaryField},
 	}
-	var probe summaryResponse
-	deadline := time.Now().Add(cl.WaitTimeout)
-	for {
-		status, body := requestConfigMapSummary(t, cl, base)
-		if status != http.StatusOK {
-			t.Fatalf("SQL summary query returned status %d: %s", status, compactBody(body))
+	wantTotals := []summaryItem{{
+		Property: summaryField,
+		Counts: map[string]summaryCount{
+			"blue":  {Total: 2},
+			"green": {Total: 1},
+		},
+	}}
+	if !t.Run("summary preserves totals", func(t *testing.T) {
+		structured := actions.SteveSupports(actions.SteveStructuredSummary)
+		deadline := time.Now().Add(cl.WaitTimeout)
+		for {
+			status, body := requestConfigMapSummary(t, cl, base)
+			if status != http.StatusOK {
+				t.Fatalf("SQL summary query returned status %d: %s", status, compactBody(body))
+			}
+			probe, err := decodeSummaryResponse(body, structured)
+			if err != nil {
+				t.Fatalf("decode SQL summary response (structured=%t): %v", structured, err)
+			}
+			if len(probe.Data) == 3 && reflect.DeepEqual(probe.Summary, wantTotals) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("data length = %d, summary = %#v; want 3 resources and exactly %#v", len(probe.Data), probe.Summary, wantTotals)
+			}
+			time.Sleep(cl.PollInterval)
 		}
-		if err := json.Unmarshal(body, &probe); err != nil {
-			t.Fatalf("decode SQL summary response: %v", err)
-		}
-		if len(probe.Summary) > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("SQL mode was positively detected, but the summary for an isolated non-empty fixture remained empty")
-		}
-		time.Sleep(cl.PollInterval)
+	}) {
+		return
 	}
 
 	wantSummary := []summaryItem{
@@ -114,6 +127,7 @@ func TestConfigMapSummaryOnlyAndNamespaced(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			actions.RequireSteveFeature(t, actions.SteveSummaryOptions)
 			values := url.Values{
 				query.FilterParam: {query.Equal("metadata.labels."+actions.CaseLabel, caseID)},
 			}
@@ -151,6 +165,35 @@ func TestConfigMapSummaryOnlyAndNamespaced(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Decode the expected wire format for the selected version. Modern targets
+// remain strict: a numeric response there is a regression, not a legacy fallback.
+func decodeSummaryResponse(body []byte, structured bool) (summaryResponse, error) {
+	if structured {
+		var response summaryResponse
+		err := json.Unmarshal(body, &response)
+		return response, err
+	}
+	var legacy struct {
+		Data    []map[string]any `json:"data"`
+		Summary []struct {
+			Property string         `json:"property"`
+			Counts   map[string]int `json:"counts"`
+		} `json:"summary"`
+	}
+	if err := json.Unmarshal(body, &legacy); err != nil {
+		return summaryResponse{}, err
+	}
+	response := summaryResponse{Data: legacy.Data}
+	for _, item := range legacy.Summary {
+		counts := make(map[string]summaryCount, len(item.Counts))
+		for value, total := range item.Counts {
+			counts[value] = summaryCount{Total: total}
+		}
+		response.Summary = append(response.Summary, summaryItem{Property: item.Property, Counts: counts})
+	}
+	return response, nil
 }
 
 func requestConfigMapSummary(t *testing.T, cl *client.Client, values url.Values) (int, []byte) {

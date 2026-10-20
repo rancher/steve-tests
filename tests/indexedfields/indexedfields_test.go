@@ -2,6 +2,7 @@
 package indexedfields
 
 import (
+	"fmt"
 	"net/url"
 	"testing"
 
@@ -9,15 +10,20 @@ import (
 )
 
 // Add a row for a new indexed field. Supply two valid resource bodies whose
-// field values sort low < high under the index's type, and a merge patch that changes low to high.
+// field values sort low < high under the index's type, and an update that changes low to high.
 // The same contract checks filtering, both sort directions, and index refresh.
 func TestSQLIndexedFields(t *testing.T) {
 	t.Parallel()
+	configMapLow, configMapHigh := 2, 10
+	if !actions.SteveSupports(actions.SteveNumericConfigMapCount) {
+		configMapLow, configMapHigh = 10, 2
+	}
 	tests := []struct {
 		name, resource, field string
 		low, high             map[string]any
 		lowValue, highValue   string
-		update                map[string]any
+		update                func(map[string]any) error
+		feature               actions.SteveFeature
 	}{
 		// HPA replica indexes use TEXT, so "10" sorts before "2".
 		{
@@ -25,27 +31,35 @@ func TestSQLIndexedFields(t *testing.T) {
 			field: "spec.minReplicas",
 			low:   hpa(10, 20), high: hpa(2, 20),
 			lowValue: "10", highValue: "2",
-			update: map[string]any{"spec": map[string]any{"minReplicas": 2}},
+			update:  updateSpecField("minReplicas", 2),
+			feature: actions.SteveNumericFieldIndexes,
 		},
 		{
 			name: "hpa max replicas", resource: "autoscaling.horizontalpodautoscaler",
 			field: "spec.maxReplicas",
 			low:   hpa(1, 10), high: hpa(1, 2),
 			lowValue: "10", highValue: "2",
-			update: map[string]any{"spec": map[string]any{"maxReplicas": 2}},
+			update:  updateSpecField("maxReplicas", 2),
+			feature: actions.SteveNumericFieldIndexes,
 		},
-		// ConfigMap data counts use an integer index, so 2 sorts before 10.
+		// ConfigMap data counts use INT on newer releases and TEXT on older ones.
 		{
 			name: "configmap data count", resource: "configmap",
 			field: "metadata.fields[1]",
-			low:   configMap(2), high: configMap(10),
-			lowValue: "2", highValue: "10",
-			update: map[string]any{"data": configMap(10)["data"]},
+			low:   configMap(configMapLow), high: configMap(configMapHigh),
+			lowValue: fmt.Sprint(configMapLow), highValue: fmt.Sprint(configMapHigh),
+			update: func(current map[string]any) error {
+				current["data"] = configMap(configMapHigh)["data"]
+				return nil
+			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
+			if test.feature != "" {
+				actions.RequireSteveFeature(t, test.feature)
+			}
 			cl := actions.RequireSQLMode(t).Client
 			if _, ok := cl.Schema(test.resource); !ok {
 				t.Fatalf("required schema %q is missing", test.resource)
@@ -100,7 +114,7 @@ func TestSQLIndexedFields(t *testing.T) {
 			// This subtest performs its own transition and does not rely on siblings.
 			t.Run("update refreshes index", func(t *testing.T) {
 				check(t, test.field+"="+test.lowValue, "metadata.name", []string{"z-low"})
-				if _, err := resources.PatchContext(t.Context(), "z-low", test.update, "application/merge-patch+json"); err != nil {
+				if _, err := actions.UpdateWithConflictRetry(t.Context(), resources, "z-low", test.update); err != nil {
 					t.Fatalf("update indexed field: %v", err)
 				}
 				check(t, test.field+"="+test.highValue, "metadata.name", []string{"a-high", "z-low"})
@@ -108,5 +122,16 @@ func TestSQLIndexedFields(t *testing.T) {
 				check(t, "", test.field+",metadata.name", []string{"a-high", "z-low"})
 			})
 		})
+	}
+}
+
+func updateSpecField(field string, value any) func(map[string]any) error {
+	return func(current map[string]any) error {
+		spec, ok := current["spec"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("resource has no spec object")
+		}
+		spec[field] = value
+		return nil
 	}
 }

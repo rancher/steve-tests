@@ -108,7 +108,13 @@ func TestSteveCollectionSurfacesRemainResponsive(t *testing.T) {
 // Collections backed by APIs without a list verb must return without waiting
 // for a list/watch informer that cannot synchronize.
 func TestCollectionsWithoutGETMethodDoNotHang(t *testing.T) {
-	client := actions.IntegrationClient(t)
+	setup := actions.SetupIntegration(t)
+	if setup.CacheMode == "sql" {
+		// Older SQL stores start an informer that can never synchronize for
+		// these APIs. A pending schema refresh can then block other resources.
+		actions.RequireSteveFeature(t, actions.SteveNonListableCollectionGuard)
+	}
+	client := setup.Client
 	tested := 0
 	for _, schema := range client.Schemas {
 		if schema.Links["collection"] == "" || contains(schema.CollectionMethods, http.MethodGet) {

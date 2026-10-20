@@ -1,8 +1,8 @@
 // Command latesttags prints the newest Steve tag for each supported minor
-// line, one "minor=tag" pair per line. It reads tags from git ls-remote
-// output on stdin:
+// line, one "minor=tag" pair per line. It reads tag names or ref listings
+// on stdin:
 //
-//	git ls-remote --tags --refs https://github.com/rancher/steve.git 'refs/tags/v*' |
+//	gh api --paginate 'repos/rancher/steve/tags?per_page=100' --jq '.[].name' |
 //	  go run ./pipeline/steve/latesttags 0.8 0.9 0.10
 package main
 
@@ -24,7 +24,7 @@ var releaseTag = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$`
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: latesttags MINOR [MINOR...]  (git ls-remote output on stdin)")
+		fmt.Fprintln(os.Stderr, "usage: latesttags MINOR [MINOR...]  (tag names or ref listings on stdin)")
 		os.Exit(2)
 	}
 

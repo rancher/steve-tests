@@ -16,11 +16,12 @@ func TestConfigMapsCollectionScenarios(t *testing.T) {
 	t.Parallel()
 	cl := getTestClient(t)
 	tests := []struct {
-		name  string
-		sql   bool
-		seeds []collectionSeed
-		query string
-		want  actions.CollectionExpectation
+		name        string
+		sql         bool
+		seeds       []collectionSeed
+		query       string
+		want        actions.CollectionExpectation
+		legacyOrder []string
 	}{
 		{name: "configmap collection scenario POC",
 			seeds: []collectionSeed{
@@ -76,25 +77,27 @@ func TestConfigMapsCollectionScenarios(t *testing.T) {
 			query: "filter=metadata.labels.steve-test-poc=multi-sort&sort=metadata.labels[group],-metadata.name",
 			want:  actions.CollectionExpectation{Order: []string{"ms-a-2", "ms-a-1", "ms-b-1"}},
 		},
-		{name: "configmap label sort ascending ignores case",
+		{name: "configmap label sort ascending uses version collation",
 			sql: true,
 			seeds: []collectionSeed{
 				{name: "label-alpha", labels: map[string]string{"mixed-case-sort": "alpha", "steve-test-poc": "label-case-sort"}},
 				{name: "label-bravo", labels: map[string]string{"mixed-case-sort": "Bravo", "steve-test-poc": "label-case-sort"}},
 				{name: "label-charlie", labels: map[string]string{"mixed-case-sort": "charlie", "steve-test-poc": "label-case-sort"}},
 			},
-			query: "filter=metadata.labels.steve-test-poc=label-case-sort&sort=metadata.labels[mixed-case-sort]",
-			want:  actions.CollectionExpectation{Order: []string{"label-alpha", "label-bravo", "label-charlie"}},
+			query:       "filter=metadata.labels.steve-test-poc=label-case-sort&sort=metadata.labels[mixed-case-sort]",
+			want:        actions.CollectionExpectation{Order: []string{"label-alpha", "label-bravo", "label-charlie"}},
+			legacyOrder: []string{"label-bravo", "label-alpha", "label-charlie"},
 		},
-		{name: "configmap label sort descending ignores case",
+		{name: "configmap label sort descending uses version collation",
 			sql: true,
 			seeds: []collectionSeed{
 				{name: "label-desc-alpha", labels: map[string]string{"mixed-case-sort": "alpha", "steve-test-poc": "label-case-sort-desc"}},
 				{name: "label-desc-bravo", labels: map[string]string{"mixed-case-sort": "Bravo", "steve-test-poc": "label-case-sort-desc"}},
 				{name: "label-desc-charlie", labels: map[string]string{"mixed-case-sort": "charlie", "steve-test-poc": "label-case-sort-desc"}},
 			},
-			query: "filter=metadata.labels.steve-test-poc=label-case-sort-desc&sort=-metadata.labels[mixed-case-sort]",
-			want:  actions.CollectionExpectation{Order: []string{"label-desc-charlie", "label-desc-bravo", "label-desc-alpha"}},
+			query:       "filter=metadata.labels.steve-test-poc=label-case-sort-desc&sort=-metadata.labels[mixed-case-sort]",
+			want:        actions.CollectionExpectation{Order: []string{"label-desc-charlie", "label-desc-bravo", "label-desc-alpha"}},
+			legacyOrder: []string{"label-desc-charlie", "label-desc-alpha", "label-desc-bravo"},
 		},
 		{name: "configmap optional label sort ascending retains unlabeled rows",
 			sql: true,
@@ -142,7 +145,18 @@ func TestConfigMapsCollectionScenarios(t *testing.T) {
 				actions.CreateAndWait(t, resources, seed.name, newConfigMapBody(ns, seed.name, labels))
 			}
 			query := "filter=metadata.labels." + actions.CaseLabel + "=collection&" + test.query
-			actions.WaitForCollection(t, resources, query, test.want)
+			if test.sql && !actions.SteveSupports(actions.SteveMultipleLabelFilterSort) {
+				// Older SQL joins reuse aliases when two label filters are
+				// combined with a label sort. Each row owns its namespace, and
+				// its existing steve-test-poc filter already selects its seeds.
+				query = test.query
+				t.Log("Checking label sorting with one fixture-selecting label filter")
+			}
+			want := test.want
+			if test.legacyOrder != nil && !actions.SteveSupports(actions.SteveCaseInsensitiveSort) {
+				want.Order = test.legacyOrder
+			}
+			actions.WaitForCollection(t, resources, query, want)
 		})
 	}
 }

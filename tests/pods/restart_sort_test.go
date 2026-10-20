@@ -21,31 +21,37 @@ type restartSeed struct {
 }
 
 func TestPodsRestartSortScenarios(t *testing.T) {
+	actions.RequireSteveFeature(t, actions.StevePodRestartIndexes)
 	cl := actions.RequireSQLMode(t).Client
 	actions.RequireWorkloads(t)
 	tests := []struct {
-		name  string
-		seeds []restartSeed
-		query string
-		want  []string
+		name       string
+		seeds      []restartSeed
+		query      string
+		want       []string
+		legacyWant []string
 	}{
 		{name: "pod restart count sort ascending remains numeric",
 			seeds: []restartSeed{
 				{name: "restart-count-never", body: newNeverRestartPodBody},
 				{name: "restart-count-once", restarted: true, body: newRestartOncePodBody},
 			}, query: "sort=metadata.fields[3][0]&pagesize=10", want: []string{"restart-count-never", "restart-count-once"}},
-		{name: "pod last restart sort ascending puts youngest first and never restarted last",
+		{name: "pod last restart sort ascending",
 			seeds: []restartSeed{
 				{name: "last-restart-old", restarted: true, body: newRestartOncePodBody, minimumAge: 3 * time.Second},
 				{name: "last-restart-young", restarted: true, body: newRestartOncePodBody},
 				{name: "last-restart-never", body: newNeverRestartPodBody},
-			}, query: "sort=metadata.fields[3][1]&pagesize=10", want: []string{"last-restart-young", "last-restart-old", "last-restart-never"}},
-		{name: "pod last restart sort descending puts never restarted first then oldest",
+			}, query: "sort=metadata.fields[3][1]&pagesize=10",
+			want:       []string{"last-restart-young", "last-restart-old", "last-restart-never"},
+			legacyWant: []string{"last-restart-never", "last-restart-old", "last-restart-young"}},
+		{name: "pod last restart sort descending",
 			seeds: []restartSeed{
 				{name: "last-restart-desc-old", restarted: true, body: newRestartOncePodBody, minimumAge: 3 * time.Second},
 				{name: "last-restart-desc-young", restarted: true, body: newRestartOncePodBody},
 				{name: "last-restart-desc-never", body: newNeverRestartPodBody},
-			}, query: "sort=-metadata.fields[3][1]&pagesize=10", want: []string{"last-restart-desc-never", "last-restart-desc-old", "last-restart-desc-young"}},
+			}, query: "sort=-metadata.fields[3][1]&pagesize=10",
+			want:       []string{"last-restart-desc-never", "last-restart-desc-old", "last-restart-desc-young"},
+			legacyWant: []string{"last-restart-desc-young", "last-restart-desc-old", "last-restart-desc-never"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -64,7 +70,14 @@ func TestPodsRestartSortScenarios(t *testing.T) {
 					waitForPodLastRestartDuration(t, resources, seed.name)
 				}
 			}
-			coll := actions.WaitForCollection(t, resources, "filter=metadata.labels."+actions.CaseLabel+"=restart-sort&"+test.query, actions.CollectionExpectation{Order: test.want})
+			want := test.want
+			if test.legacyWant != nil && !actions.SteveSupports(actions.SteveRestartAgeSort) {
+				// Earlier Steve releases order raw timestamps, before the
+				// conversion to elapsed age used by newer releases.
+				want = test.legacyWant
+				t.Log("Checking legacy restart timestamp ordering")
+			}
+			coll := actions.WaitForCollection(t, resources, "filter=metadata.labels."+actions.CaseLabel+"=restart-sort&"+test.query, actions.CollectionExpectation{Order: want})
 			logPodRestartOrder(t, coll)
 		})
 	}

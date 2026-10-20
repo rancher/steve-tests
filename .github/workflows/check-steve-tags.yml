@@ -20,10 +20,10 @@ env:
   S3_BUCKET: ${{ secrets.STEVE_TAGS_S3_BUCKET }}
   # Cache objects are stored at steve/<minor>.txt, matching the IAM permissions.
   S3_KEY_PREFIX: "steve/"
-  # Steve minors in Rancher releases: 0.8 is v2.14, 0.9 is v2.15, 0.10 is main.
-  # 0.8 is left out because the suite covers sorting and indexing behavior
-  # that Steve 0.8 does not have. Add it here to track v2.14 anyway.
-  SUPPORTED_MINORS: "0.9 0.10"
+  # Read Steve dependencies from the newest Rancher release lines and main.
+  # Override the rolling window with the RANCHER_RELEASE_LINES repository variable.
+  RANCHER_RELEASE_LINES: ${{ vars.RANCHER_RELEASE_LINES || '5' }}
+  GOFLAGS: -buildvcs=false
 
 jobs:
   check-steve-tags:
@@ -60,14 +60,20 @@ jobs:
 
       - name: Discover latest supported Steve tags
         id: tags
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          # SUPPORTED_MINORS is intentionally split into one argument per minor.
-          # shellcheck disable=SC2086
-          versions="$(git ls-remote --tags --refs \
-              https://github.com/rancher/steve.git 'refs/tags/v*' |
-            go run ./pipeline/steve/latesttags $SUPPORTED_MINORS)"
+          minors="$(go run ./pipeline/steve/rancherminors \
+            -release-lines "$RANCHER_RELEASE_LINES")"
+          read -r -a supported_minors <<< "$minors"
+          echo "Discovered Steve minors: $minors"
+
+          gh api --paginate 'repos/rancher/steve/tags?per_page=100' \
+            --jq '.[].name' > "$RUNNER_TEMP/steve-tags.txt"
+          versions="$(go run ./pipeline/steve/latesttags \
+            "${supported_minors[@]}" < "$RUNNER_TEMP/steve-tags.txt")"
 
           {
             echo "versions<<EOF"

@@ -7,11 +7,10 @@ import (
 	"github.com/rancher/steve-tests/actions"
 )
 
-// TestConfigMapsNumericFieldSortAndCompare verifies that Steve treats the
-// configmap DATA printer column (metadata.fields[1], the number of data keys)
-// as a number, not a string: 10 must sort after 2, and range filters must
-// compare numerically. This guards the same class of bug the pod restart
-// count sorts exist for.
+// TestConfigMapsNumericFieldSortAndCompare verifies sorting and range filters
+// for the ConfigMap DATA printer column (metadata.fields[1], the number of data
+// keys). Releases with the integer index compare numerically; older releases
+// retain coverage of their original text index.
 func TestConfigMapsNumericFieldSortAndCompare(t *testing.T) {
 	t.Parallel()
 	cl := actions.RequireSQLMode(t).Client
@@ -48,14 +47,24 @@ func TestConfigMapsNumericFieldSortAndCompare(t *testing.T) {
 
 	baseFilter := fmt.Sprintf("filter=metadata.labels.%s=%s", actions.CaseLabel, caseID)
 
+	ascending := []string{"keys-one", "keys-two", "keys-ten"}
+	descending := []string{"keys-ten", "keys-two", "keys-one"}
+	lessThanThree := []string{"keys-one", "keys-two"}
+	if !actions.SteveSupports(actions.SteveNumericConfigMapCount) {
+		ascending = []string{"keys-one", "keys-ten", "keys-two"}
+		descending = []string{"keys-two", "keys-ten", "keys-one"}
+		lessThanThree = []string{"keys-one", "keys-ten", "keys-two"}
+		t.Log("Checking ConfigMap DATA count against this release's text index")
+	}
+
 	tests := []struct {
 		name, query string
 		want        []string
 	}{
-		{"ascending sort is numeric not lexicographic", "&sort=metadata.fields[1]", []string{"keys-one", "keys-two", "keys-ten"}},
-		{"descending sort is numeric", "&sort=-metadata.fields[1]", []string{"keys-ten", "keys-two", "keys-one"}},
-		{"greater-than filter compares numerically", "&filter=metadata.fields[1]%3E1&sort=metadata.name", []string{"keys-ten", "keys-two"}},
-		{"less-than filter compares numerically", "&filter=metadata.fields[1]%3C3&sort=metadata.name", []string{"keys-one", "keys-two"}},
+		{"ascending sort", "&sort=metadata.fields[1]", ascending},
+		{"descending sort", "&sort=-metadata.fields[1]", descending},
+		{"greater-than filter", "&filter=metadata.fields[1]%3E1&sort=metadata.name", []string{"keys-ten", "keys-two"}},
+		{"less-than filter", "&filter=metadata.fields[1]%3C3&sort=metadata.name", lessThanThree},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

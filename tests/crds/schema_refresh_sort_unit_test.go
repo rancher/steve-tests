@@ -122,6 +122,32 @@ func TestIsSQLCacheWarmup(t *testing.T) {
 }
 
 func TestPrinterFieldHelpers(t *testing.T) {
+	t.Run("date cells", testVerifyPrinterDateCell)
+	t.Run("refresh waits for all printer columns", func(t *testing.T) {
+		fixtures := []probeFixture{{Name: "sort-alpha", SortValue: "alpha"}}
+		fields := map[string][]any{
+			"sort-alpha": {"sort-alpha", "alpha", "20d", "tail-a", "2023-01-02T03:04:05Z"},
+		}
+		markers := []map[string]string{
+			{"sort-alpha": "2025-01-02T03:04:05Z"},
+			{"sort-alpha": "tail-a"},
+			{"sort-alpha": "2023-01-02T03:04:05Z"},
+		}
+		if err := verifyMarkerState(fields, fixtures, true); err != nil {
+			t.Fatalf("string printer marker should already be visible: %v", err)
+		}
+		if err := verifyMarkerState(fields, fixtures, true, markers...); err == nil {
+			t.Fatal("refresh completed while the date cell still held a stale human duration")
+		}
+		fields["sort-alpha"][2] = "2025-01-02T03:04:05Z"
+		if err := verifyMarkerState(fields, fixtures, true, markers...); err != nil {
+			t.Fatalf("complete refreshed layout was rejected: %v", err)
+		}
+		fields["sort-alpha"][3] = ""
+		if err := verifyMarkerState(fields, fixtures, true, markers...); err == nil {
+			t.Fatal("refresh completed without the trailing string column")
+		}
+	})
 	fixtures := []probeFixture{{Name: "sort-alpha", SortValue: "alpha"}, {Name: "sort-bravo", SortValue: "Bravo"}}
 	tests := []struct {
 		name      string
@@ -281,6 +307,26 @@ func TestSetPrinterColumns(t *testing.T) {
 }
 
 func TestVerifyDynamicSchemaColumns(t *testing.T) {
+	t.Run("legacy JSONPath columns omit implicit name and age", func(t *testing.T) {
+		columns := []dynamicColumn{
+			{Name: "Sort Value", Field: ".spec.sortValue", Type: "string"},
+			{Name: "Observed At", Field: ".spec.observedAt", Type: "date"},
+		}
+		expected := map[string]expectedDynamicColumn{
+			"Name":        {Absent: true},
+			"Age":         {Absent: true},
+			"Sort Value":  {Field: ".spec.sortValue", Type: "string"},
+			"Observed At": {Field: ".spec.observedAt", Type: "date"},
+		}
+		if err := verifyDynamicSchemaColumns(columns, expected); err != nil {
+			t.Fatal(err)
+		}
+		columns[1].Field = "$.metadata.fields[2]"
+		if err := verifyDynamicSchemaColumns(columns, expected); err == nil {
+			t.Fatal("legacy JSONPath expectation accepted a different field mapping")
+		}
+	})
+
 	columns := []dynamicColumn{
 		{Name: "Name", Field: "$.metadata.fields[0]", Type: "string"},
 		{Name: "Observed At", Field: "$.metadata.fields[2]", Type: "date"},
@@ -306,6 +352,42 @@ func TestVerifyDynamicSchemaColumns(t *testing.T) {
 			err := verifyDynamicSchemaColumns(columns, test.expect)
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("verifyDynamicSchemaColumns() error = %v, want substring %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func testVerifyPrinterDateCell(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		value   any
+		rawDate bool
+		wantErr string
+	}{
+		{name: "raw timestamp", value: "2026-01-02T03:04:05Z", rawDate: true},
+		{name: "raw timestamp with offset", value: "2026-01-02T03:04:05-04:00", rawDate: true},
+		{name: "legacy seconds", value: "0s"},
+		{name: "legacy minutes and seconds", value: "3m20s"},
+		{name: "legacy hours", value: "25h"},
+		{name: "legacy whole days", value: "30d"},
+		{name: "legacy years and days", value: "2y30d"},
+		{name: "legacy age on modern target", value: "30d", rawDate: true, wantErr: "not an RFC3339 timestamp"},
+		{name: "raw timestamp on legacy target", value: "2026-01-02T03:04:05Z", wantErr: "not a human-readable Kubernetes age"},
+		{name: "empty age", value: "", wantErr: "not a human-readable Kubernetes age"},
+		{name: "invalid age", value: "<invalid>", wantErr: "not a human-readable Kubernetes age"},
+		{name: "non-date column", value: "tail-a", wantErr: "not a human-readable Kubernetes age"},
+		{name: "numeric cell", value: 30, wantErr: "want string"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := verifyPrinterDateCell(test.value, test.rawDate)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("verifyPrinterDateCell() error = %v, want %q", err, test.wantErr)
 			}
 		})
 	}

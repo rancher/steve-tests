@@ -17,8 +17,8 @@ import (
 	"github.com/rancher/steve-tests/pkg/query"
 )
 
-// In SQL mode, revision is a minimum resource version. A cache older than the
-// requested revision must not return stale data.
+// Releases with revision validation reject a minimum resource version newer
+// than the cache. Older releases ignore this parameter and return current data.
 func TestConfigMapsFutureRevisionIsRejected(t *testing.T) {
 	t.Parallel()
 	setup := actions.RequireSQLMode(t)
@@ -39,9 +39,14 @@ func TestConfigMapsFutureRevisionIsRejected(t *testing.T) {
 	}
 	baseline := waitForRevisionBaseline(t, resources, values, name)
 
-	revision, err := strconv.ParseInt(baseline.Revision, 10, 64)
-	if err != nil || revision < 0 {
-		t.Fatalf("baseline revision = %q, want a non-negative base-10 int64", baseline.Revision)
+	var revision int64
+	if actions.SteveSupports(actions.SteveCollectionRevision) {
+		revision, err = strconv.ParseInt(baseline.Revision, 10, 64)
+		if err != nil || revision < 0 {
+			t.Fatalf("baseline revision = %q, want a non-negative base-10 int64", baseline.Revision)
+		}
+	} else if baseline.Revision != "" {
+		t.Fatalf("legacy collection revision = %q, want the field omitted", baseline.Revision)
 	}
 
 	// Zero is safe across HA replicas. MaxInt64 cannot be overtaken by a busy
@@ -66,11 +71,22 @@ func TestConfigMapsFutureRevisionIsRejected(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
-			_, err = resources.ListValuesContext(ctx, values)
+			collection, err := resources.ListValuesContext(ctx, values)
 			if test.wantStatus == 0 {
 				if err != nil {
 					t.Fatalf("known revision rejected: %v", err)
 				}
+				return
+			}
+			if !actions.SteveSupports(actions.SteveFutureRevisionValidation) {
+				if err != nil {
+					t.Fatalf("legacy revision parameter rejected: %v", err)
+				}
+				names := collectionNames(collection)
+				if len(collection.Data) != 1 || len(names) != 1 || names[0] != name {
+					t.Fatalf("legacy revision query returned names %v, want current fixture %q", names, name)
+				}
+				t.Log("Checking current data returned by a release that ignores revision")
 				return
 			}
 			if !client.IsStatus(err, test.wantStatus) {

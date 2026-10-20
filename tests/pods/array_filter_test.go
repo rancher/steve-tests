@@ -11,6 +11,7 @@ import (
 // CONTAINS and NOTCONTAINS compare complete array members and inspect every
 // container, including those after the first.
 func TestPodsArrayFilterByExactContainerImage(t *testing.T) {
+	actions.RequireSteveFeature(t, actions.SteveArrayMembershipFilters)
 	setup := actions.RequireSQLMode(t)
 	actions.RequireWorkloads(t)
 	cl := setup.Client

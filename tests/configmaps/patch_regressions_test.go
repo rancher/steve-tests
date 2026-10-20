@@ -13,6 +13,7 @@ import (
 func TestNamespacedPatchPreservesPatchType(t *testing.T) {
 	t.Parallel()
 	cl := getTestClient(t)
+	actions.RequireSteveFeature(t, actions.SteveNamespacedPatch)
 	ns := actions.CreateTestNamespace(t, cl)
 	resources := cl.Resource("configmap").Namespace(ns)
 

@@ -53,10 +53,14 @@ func TestJobSyntheticStateIndexRefreshes(t *testing.T) {
 			// Trigger failure only after the active SQL index is observed. Decreasing
 			// activeDeadlineSeconds is a mutable Job update and avoids racing a fixed
 			// container sleep against API/cache latency on a slow cluster.
-			if _, err := resources.PatchContext(t.Context(), name, map[string]any{
-				"metadata": map[string]any{"namespace": namespace},
-				"spec":     map[string]any{"activeDeadlineSeconds": test.deadline},
-			}, "application/merge-patch+json"); err != nil {
+			if _, err := actions.UpdateWithConflictRetry(t.Context(), resources, name, func(current map[string]any) error {
+				spec, ok := current["spec"].(map[string]any)
+				if !ok {
+					return fmt.Errorf("Job has no spec object")
+				}
+				spec["activeDeadlineSeconds"] = test.deadline
+				return nil
+			}); err != nil {
 				t.Fatalf("shorten Job active deadline: %v", err)
 			}
 			transitionTimeout := resources.WaitTimeout() + 15*time.Second

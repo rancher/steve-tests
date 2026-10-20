@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -127,7 +128,7 @@ func TestCRDPrinterColumnRefreshAndCaseInsensitiveSort(t *testing.T) {
 	)
 
 	for _, test := range []struct{ name, prefix string }{
-		{name: "default generated name uses kind prefix", prefix: "ssp-"},
+		{name: "default generated name prefix", prefix: "ssp-"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			created, err := probes.Create(newGeneratedProbeResource(group, namespace, groupPrefix))
@@ -152,8 +153,12 @@ func TestCRDPrinterColumnRefreshAndCaseInsensitiveSort(t *testing.T) {
 			// SteveSortProbe -> ssp-. The old bug used the first character of the
 			// group-qualified schema ID instead.
 			wantPrefix := test.prefix
+			if !actions.SteveSupports(actions.SteveKindNamePrefix) {
+				wantPrefix = discovered.ID[:1] + "-"
+				t.Logf("Checking legacy schema-derived generated name prefix %q", wantPrefix)
+			}
 			if !strings.HasPrefix(name, wantPrefix) {
-				t.Fatalf("generated name = %q, want Kind-derived prefix %q (schema ID %q must not determine the prefix)", name, wantPrefix, discovered.ID)
+				t.Fatalf("generated name = %q, want prefix %q (schema ID %q)", name, wantPrefix, discovered.ID)
 			}
 		})
 	}
@@ -162,6 +167,22 @@ func TestCRDPrinterColumnRefreshAndCaseInsensitiveSort(t *testing.T) {
 		{Name: "sort-alpha", SortValue: "alpha", ObservedAt: "2025-01-02T03:04:05Z", TailValue: "tail-a", FinalizedAt: "2023-01-02T03:04:05Z", ReplacementValue: "Zulu"},
 		{Name: "sort-bravo", SortValue: "Bravo", ObservedAt: "2024-01-02T03:04:05Z", TailValue: "tail-b", FinalizedAt: "2022-01-02T03:04:05Z", ReplacementValue: "alpha"},
 		{Name: "sort-charlie", SortValue: "charlie", ObservedAt: "2026-01-02T03:04:05Z", TailValue: "tail-c", FinalizedAt: "2024-01-02T03:04:05Z", ReplacementValue: "Mike"},
+	}
+	observedAtMarkers := fixtureObservedAtMarkers(fixtures)
+	finalizedAtMarkers := fixtureFinalizedAtMarkers(fixtures)
+	if !actions.SteveSupports(actions.SteveRawDateColumns) {
+		// Older Steve releases keep Kubernetes' human-readable Table cells.
+		// Ages between eight days and two years print as whole days; center
+		// these fixtures within a day so their exact cells stay stable for
+		// twelve hours, regardless of the time this test starts.
+		now := time.Now().UTC()
+		for index, ages := range []struct{ observed, finalized int }{{20, 40}, {30, 50}, {10, 30}} {
+			fixtures[index].ObservedAt = now.Add(-time.Duration(ages.observed)*24*time.Hour - 12*time.Hour).Format(time.RFC3339)
+			fixtures[index].FinalizedAt = now.Add(-time.Duration(ages.finalized)*24*time.Hour - 12*time.Hour).Format(time.RFC3339)
+			observedAtMarkers[fixtures[index].Name] = fmt.Sprintf("%dd", ages.observed)
+			finalizedAtMarkers[fixtures[index].Name] = fmt.Sprintf("%dd", ages.finalized)
+		}
+		t.Log("Checking legacy human-readable date cells")
 	}
 	for _, fixture := range fixtures {
 		body := newProbeResource(group, namespace, groupPrefix, fixture)
@@ -200,22 +221,25 @@ func TestCRDPrinterColumnRefreshAndCaseInsensitiveSort(t *testing.T) {
 		true,
 		setup.Config.WaitTimeoutDuration(),
 		setup.Config.PollIntervalDuration(),
+		observedAtMarkers,
+		fixtureTailMarkers(fixtures),
+		finalizedAtMarkers,
 	)
 	fieldIndex, err := commonMarkerIndex(updatedFields, fixtureMarkers(fixtures))
 	if err != nil {
 		t.Fatalf("updated metadata.fields did not expose one stable printer-column index: %v", err)
 	}
-	dateIndex, err := commonMarkerIndex(updatedFields, fixtureObservedAtMarkers(fixtures))
+	dateIndex, err := commonMarkerIndex(updatedFields, observedAtMarkers)
 	if err != nil {
-		t.Fatalf("updated metadata.fields did not preserve RFC3339 date-column values: %v", err)
+		t.Fatalf("updated metadata.fields did not preserve the expected date-column values: %v", err)
 	}
 	tailIndex, err := commonMarkerIndex(updatedFields, fixtureTailMarkers(fixtures))
 	if err != nil {
 		t.Fatalf("updated metadata.fields did not expose the trailing column values: %v", err)
 	}
-	finalDateIndex, err := commonMarkerIndex(updatedFields, fixtureFinalizedAtMarkers(fixtures))
+	finalDateIndex, err := commonMarkerIndex(updatedFields, finalizedAtMarkers)
 	if err != nil {
-		t.Fatalf("updated metadata.fields did not preserve the final RFC3339 date-column values: %v", err)
+		t.Fatalf("updated metadata.fields did not preserve the expected final date-column values: %v", err)
 	}
 	if !(fieldIndex < dateIndex && dateIndex < tailIndex && tailIndex < finalDateIndex) {
 		t.Fatalf("printer-column indexes = sort:%d date:%d tail:%d finalDate:%d, want configured string/date/string/date order", fieldIndex, dateIndex, tailIndex, finalDateIndex)
@@ -225,11 +249,12 @@ func TestCRDPrinterColumnRefreshAndCaseInsensitiveSort(t *testing.T) {
 		setup.Client,
 		selector,
 		map[string]expectedDynamicColumn{
-			"Name":         {Index: 0, Type: "string"},
-			"Sort Value":   {Index: fieldIndex, Type: "string"},
-			"Observed At":  {Index: dateIndex, Type: "date"},
-			"Tail Value":   {Index: tailIndex, Type: "string"},
-			"Finalized At": {Index: finalDateIndex, Type: "date"},
+			"Name":         {Index: 0, Type: "string", Absent: !actions.SteveSupports(actions.StevePrinterColumnFieldMapping)},
+			"Sort Value":   expectedPrinterColumn(fieldIndex, "string", ".spec.sortValue"),
+			"Observed At":  expectedPrinterColumn(dateIndex, "date", ".spec.observedAt"),
+			"Tail Value":   expectedPrinterColumn(tailIndex, "string", ".spec.tailValue"),
+			"Finalized At": expectedPrinterColumn(finalDateIndex, "date", ".spec.finalizedAt"),
+			"Age":          {Absent: true},
 		},
 		setup.Config.WaitTimeoutDuration(),
 		setup.Config.PollIntervalDuration(),
@@ -237,28 +262,31 @@ func TestCRDPrinterColumnRefreshAndCaseInsensitiveSort(t *testing.T) {
 	t.Logf("refreshed dynamic resource metadata: names=%v sortField=metadata.fields[%d] dateField=metadata.fields[%d] tailField=metadata.fields[%d] finalDateField=metadata.fields[%d]", fixtureNames(fixtures), fieldIndex, dateIndex, tailIndex, finalDateIndex)
 
 	tests := []struct {
-		name   string
-		sort   string
-		filter string
-		order  []string
+		name        string
+		sort        string
+		filter      string
+		order       []string
+		legacyOrder []string
 	}{
 		{
-			name:  "ascending ignores case",
-			sort:  fmt.Sprintf("metadata.fields[%d]", fieldIndex),
-			order: []string{"sort-alpha", "sort-bravo", "sort-charlie"},
+			name:        "ascending string column",
+			sort:        fmt.Sprintf("metadata.fields[%d]", fieldIndex),
+			order:       []string{"sort-alpha", "sort-bravo", "sort-charlie"},
+			legacyOrder: []string{"sort-bravo", "sort-alpha", "sort-charlie"},
 		},
 		{
-			name:  "descending ignores case",
-			sort:  fmt.Sprintf("-metadata.fields[%d]", fieldIndex),
-			order: []string{"sort-charlie", "sort-bravo", "sort-alpha"},
+			name:        "descending string column",
+			sort:        fmt.Sprintf("-metadata.fields[%d]", fieldIndex),
+			order:       []string{"sort-charlie", "sort-bravo", "sort-alpha"},
+			legacyOrder: []string{"sort-charlie", "sort-alpha", "sort-bravo"},
 		},
 		{
-			name:  "date ascending uses timestamps",
+			name:  "date column ascending",
 			sort:  fmt.Sprintf("metadata.fields[%d]", dateIndex),
 			order: []string{"sort-bravo", "sort-alpha", "sort-charlie"},
 		},
 		{
-			name:  "date descending uses timestamps",
+			name:  "date column descending",
 			sort:  fmt.Sprintf("-metadata.fields[%d]", dateIndex),
 			order: []string{"sort-charlie", "sort-alpha", "sort-bravo"},
 		},
@@ -266,6 +294,7 @@ func TestCRDPrinterColumnRefreshAndCaseInsensitiveSort(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			actions.RequireSteveFeature(t, actions.StevePrinterColumnFieldMapping)
 			values := make(url.Values)
 			if test.sort != "" {
 				values.Set("sort", test.sort)
@@ -273,11 +302,16 @@ func TestCRDPrinterColumnRefreshAndCaseInsensitiveSort(t *testing.T) {
 			if test.filter != "" {
 				values.Set("filter", test.filter)
 			}
+			order := test.order
+			if test.legacyOrder != nil && !actions.SteveSupports(actions.SteveCaseInsensitiveSort) {
+				order = test.legacyOrder
+				t.Log("Checking legacy case-sensitive string ordering")
+			}
 			waitForExactOrder(
 				t,
 				probes,
 				values.Encode(),
-				test.order,
+				order,
 				setup.Config.WaitTimeoutDuration(),
 				setup.Config.PollIntervalDuration(),
 			)
@@ -321,8 +355,9 @@ func TestCRDPrinterColumnRefreshAndCaseInsensitiveSort(t *testing.T) {
 		setup.Client,
 		selector,
 		map[string]expectedDynamicColumn{
-			"Name":              {Index: 0, Type: "string"},
-			"Replacement Value": {Index: replacementIndex, Type: "string"},
+			"Name":              {Index: 0, Type: "string", Absent: !actions.SteveSupports(actions.StevePrinterColumnFieldMapping)},
+			"Replacement Value": expectedPrinterColumn(replacementIndex, "string", ".spec.replacementValue"),
+			"Age":               {Absent: true},
 			"Sort Value":        {Absent: true},
 			"Observed At":       {Absent: true},
 			"Tail Value":        {Absent: true},
@@ -332,16 +367,20 @@ func TestCRDPrinterColumnRefreshAndCaseInsensitiveSort(t *testing.T) {
 		setup.Config.PollIntervalDuration(),
 	)
 	for _, test := range []struct {
-		name   string
-		sort   string
-		filter string
-		order  []string
+		name        string
+		sort        string
+		filter      string
+		order       []string
+		legacyOrder []string
 	}{
-		{name: "replacement ascending", sort: fmt.Sprintf("metadata.fields[%d]", replacementIndex), order: []string{"sort-bravo", "sort-charlie", "sort-alpha"}},
-		{name: "replacement descending", sort: fmt.Sprintf("-metadata.fields[%d]", replacementIndex), order: []string{"sort-alpha", "sort-charlie", "sort-bravo"}},
+		{name: "replacement ascending", sort: fmt.Sprintf("metadata.fields[%d]", replacementIndex),
+			order: []string{"sort-bravo", "sort-charlie", "sort-alpha"}, legacyOrder: []string{"sort-charlie", "sort-alpha", "sort-bravo"}},
+		{name: "replacement descending", sort: fmt.Sprintf("-metadata.fields[%d]", replacementIndex),
+			order: []string{"sort-alpha", "sort-charlie", "sort-bravo"}, legacyOrder: []string{"sort-bravo", "sort-alpha", "sort-charlie"}},
 		{name: "replacement filter", filter: fmt.Sprintf("metadata.fields[%d]=Mike", replacementIndex), order: []string{"sort-charlie"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			actions.RequireSteveFeature(t, actions.StevePrinterColumnFieldMapping)
 			values := make(url.Values)
 			if test.sort != "" {
 				values.Set("sort", test.sort)
@@ -349,7 +388,12 @@ func TestCRDPrinterColumnRefreshAndCaseInsensitiveSort(t *testing.T) {
 			if test.filter != "" {
 				values.Set("filter", test.filter)
 			}
-			waitForExactOrder(t, probes, values.Encode(), test.order, setup.Config.WaitTimeoutDuration(), setup.Config.PollIntervalDuration())
+			order := test.order
+			if test.legacyOrder != nil && !actions.SteveSupports(actions.SteveCaseInsensitiveSort) {
+				order = test.legacyOrder
+				t.Log("Checking legacy case-sensitive replacement ordering")
+			}
+			waitForExactOrder(t, probes, values.Encode(), order, setup.Config.WaitTimeoutDuration(), setup.Config.PollIntervalDuration())
 		})
 	}
 
@@ -743,8 +787,17 @@ func replacementProbeColumns() []any {
 
 type expectedDynamicColumn struct {
 	Index  int
+	Field  string
 	Type   string
 	Absent bool
+}
+
+func expectedPrinterColumn(index int, columnType, legacyPath string) expectedDynamicColumn {
+	expected := expectedDynamicColumn{Index: index, Type: columnType}
+	if !actions.SteveSupports(actions.StevePrinterColumnFieldMapping) {
+		expected.Field = legacyPath
+	}
+	return expected
 }
 
 func waitForDynamicSchemaColumns(
@@ -843,6 +896,9 @@ func verifyDynamicSchemaColumns(columns []dynamicColumn, expected map[string]exp
 			return fmt.Errorf("schema columns %v do not contain %q", columnNames(columns), name)
 		}
 		wantField := fmt.Sprintf("$.metadata.fields[%d]", want.Index)
+		if want.Field != "" {
+			wantField = want.Field
+		}
 		if column.Field != wantField || column.Type != want.Type {
 			return fmt.Errorf("schema column %q = field:%q type:%q, want field:%q type:%q", name, column.Field, column.Type, wantField, want.Type)
 		}
@@ -868,6 +924,7 @@ func waitForPrinterFieldState(
 	wantPresent bool,
 	timeout time.Duration,
 	interval time.Duration,
+	additionalMarkers ...map[string]string,
 ) map[string][]any {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), positiveDuration(timeout, 30*time.Second))
@@ -883,7 +940,7 @@ func waitForPrinterFieldState(
 				fields, parseErr := metadataFieldsByName(collection)
 				if parseErr == nil {
 					lastFields = fields
-					if stateErr := verifyMarkerState(fields, fixtures, wantPresent); stateErr == nil {
+					if stateErr := verifyMarkerState(fields, fixtures, wantPresent, additionalMarkers...); stateErr == nil {
 						return fields
 					} else {
 						lastState = stateErr.Error()
@@ -940,18 +997,12 @@ func waitForDefaultPrinterFields(
 					break
 				}
 				if len(values) != 2 || values[0] != fixture.Name {
-					lastState = fmt.Sprintf("metadata.fields for %q = %v, want [name RFC3339-timestamp]", fixture.Name, values)
+					lastState = fmt.Sprintf("metadata.fields for %q = %v, want [name age]", fixture.Name, values)
 					valid = false
 					break
 				}
-				timestamp, ok := values[1].(string)
-				if !ok {
-					lastState = fmt.Sprintf("metadata.fields age for %q has type %T, want RFC3339 string", fixture.Name, values[1])
-					valid = false
-					break
-				}
-				if _, parseErr := time.Parse(time.RFC3339, timestamp); parseErr != nil {
-					lastState = fmt.Sprintf("metadata.fields age for %q = %q, want RFC3339 timestamp: %v", fixture.Name, timestamp, parseErr)
+				if dateErr := verifyPrinterDateCell(values[1], actions.SteveSupports(actions.SteveRawDateColumns)); dateErr != nil {
+					lastState = fmt.Sprintf("metadata.fields age for %q: %v", fixture.Name, dateErr)
 					valid = false
 					break
 				}
@@ -964,6 +1015,27 @@ func waitForDefaultPrinterFields(
 			t.Fatalf("timed out waiting for default Name/Age metadata.fields: %s", lastState)
 		}
 	}
+}
+
+// Kubernetes Table date cells use a compact age before Steve's raw-date
+// conversion. Accept only that duration grammar on historical targets.
+var humanReadableAge = regexp.MustCompile(`^[0-9]+(?:s|m(?:[0-9]+s)?|h(?:[0-9]+m)?|d(?:[0-9]+h)?|y(?:[0-9]+d)?)$`)
+
+func verifyPrinterDateCell(value any, rawDate bool) error {
+	text, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("date cell has type %T, want string", value)
+	}
+	if rawDate {
+		if _, err := time.Parse(time.RFC3339, text); err != nil {
+			return fmt.Errorf("date cell %q is not an RFC3339 timestamp: %w", text, err)
+		}
+		return nil
+	}
+	if !humanReadableAge.MatchString(text) {
+		return fmt.Errorf("date cell %q is not a human-readable Kubernetes age", text)
+	}
+	return nil
 }
 
 func waitForExactOrder(t *testing.T, resources *client.ResourceClient, query string, expected []string, timeout time.Duration, interval time.Duration) {
@@ -1018,7 +1090,7 @@ func metadataFieldsByName(collection *client.SteveCollection) (map[string][]any,
 	return result, nil
 }
 
-func verifyMarkerState(fields map[string][]any, fixtures []probeFixture, wantPresent bool) error {
+func verifyMarkerState(fields map[string][]any, fixtures []probeFixture, wantPresent bool, additionalMarkers ...map[string]string) error {
 	if len(fields) != len(fixtures) {
 		return fmt.Errorf("got metadata.fields for %d resources, want %d", len(fields), len(fixtures))
 	}
@@ -1030,6 +1102,14 @@ func verifyMarkerState(fields map[string][]any, fixtures []probeFixture, wantPre
 		present := fieldIndex(resourceFields, fixture.SortValue) >= 0
 		if present != wantPresent {
 			return fmt.Errorf("resource %q marker %q presence=%t, want %t", fixture.Name, fixture.SortValue, present, wantPresent)
+		}
+	}
+	// Column refresh can expose ordinary Table strings before the date
+	// transformer has caught up. Require the complete requested layout so
+	// observing one string does not prematurely declare refresh complete.
+	for _, markers := range additionalMarkers {
+		if _, err := commonMarkerIndex(fields, markers); err != nil {
+			return err
 		}
 	}
 	return nil

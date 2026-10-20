@@ -3,29 +3,20 @@ package deployments
 import (
 	"fmt"
 	"net/url"
-	"os"
 	"reflect"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/rancher/steve-tests/actions"
 	"github.com/rancher/steve-tests/pkg/client"
 	"github.com/rancher/steve-tests/pkg/query"
-	"golang.org/x/mod/semver"
 )
 
 // ReplicaSet associated data was introduced in Steve v0.10.1.
 func TestReplicaSetIncludesAssociatedPods(t *testing.T) {
+	actions.RequireSteveFeature(t, actions.SteveReplicaSetAssociatedData)
 	setup := actions.RequireSQLMode(t)
-	version := strings.TrimSpace(os.Getenv("STEVE_VERSION"))
-	// Skip only full release tags. Unknown targets and v0.10.1 prereleases still run.
-	if semver.IsValid(version) &&
-		strings.HasPrefix(version, semver.MajorMinor(version)+".") &&
-		semver.Compare(version, "v0.10.1-0") < 0 {
-		t.Skipf("ReplicaSet associated data requires Steve v0.10.1 or newer; target is %s", version)
-	}
 	actions.RequireWorkloads(t)
 	cl := setup.Client
 	if _, ok := cl.Schema("apps.replicaset"); !ok {

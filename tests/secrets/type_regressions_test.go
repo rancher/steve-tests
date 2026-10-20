@@ -15,8 +15,8 @@ import (
 	"github.com/rancher/steve-tests/pkg/query"
 )
 
-// Secret _type and its metadata.fields[1] alias must both support filtering
-// and sorting. Diagnostics include metadata and types, never Secret bodies.
+// Secret metadata.fields[1] supports filtering and sorting on all targets.
+// Check the _type query alias where supported. Diagnostics omit Secret bodies.
 func TestSecretTypeFilterAndSort(t *testing.T) {
 	t.Parallel()
 	setup := actions.RequireSQLMode(t)
@@ -57,14 +57,18 @@ func TestSecretTypeFilterAndSort(t *testing.T) {
 
 	caseFilter := query.Equal("metadata.labels."+actions.CaseLabel, caseID)
 	for _, test := range []struct {
-		name      string
-		filter    string
-		wantNames []string
+		name          string
+		filter        string
+		wantNames     []string
+		requiresAlias bool
 	}{
-		{name: "synthetic type filter", filter: query.Equal("_type", "Opaque"), wantNames: []string{"type-opaque"}},
+		{name: "synthetic type filter", filter: query.Equal("_type", "Opaque"), wantNames: []string{"type-opaque"}, requiresAlias: true},
 		{name: "table field type filter", filter: query.Equal("metadata.fields[1]", "Opaque"), wantNames: []string{"type-opaque"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			if test.requiresAlias {
+				actions.RequireSteveFeature(t, actions.SteveSecretTypeAlias)
+			}
 			values := url.Values{query.FilterParam: {caseFilter, test.filter}}
 			collection := waitForSecretTypeCollection(t, resources, values, test.wantNames)
 			assertSecretTypes(t, collection, map[string]string{"type-opaque": "Opaque"})
@@ -76,9 +80,14 @@ func TestSecretTypeFilterAndSort(t *testing.T) {
 		secretType string
 		stringData map[string]string
 	}(nil), fixtures...)
+	caseInsensitive := actions.SteveSupports(actions.SteveCaseInsensitiveSort)
 	sort.Slice(wantOrder, func(i, j int) bool {
-		left := strings.ToLower(wantOrder[i].secretType)
-		right := strings.ToLower(wantOrder[j].secretType)
+		left := wantOrder[i].secretType
+		right := wantOrder[j].secretType
+		if caseInsensitive {
+			left = strings.ToLower(left)
+			right = strings.ToLower(right)
+		}
 		if left == right {
 			return wantOrder[i].name < wantOrder[j].name
 		}
@@ -92,6 +101,9 @@ func TestSecretTypeFilterAndSort(t *testing.T) {
 	}
 	for _, field := range []string{"_type", "metadata.fields[1]"} {
 		t.Run("sort "+field, func(t *testing.T) {
+			if field == "_type" {
+				actions.RequireSteveFeature(t, actions.SteveSecretTypeAlias)
+			}
 			values := url.Values{
 				query.FilterParam: {caseFilter},
 				query.SortParam:   {field + ",metadata.name"},
