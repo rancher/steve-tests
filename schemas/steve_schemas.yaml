@@ -166,6 +166,31 @@
       type: 8
       is_flaky: 0
       automation: 2
+    - title: TestDeploymentReplicaSetAssociatedDataRollout
+      priority: 4
+      type: 8
+      is_flaky: 0
+      automation: 2
+    - title: TestReplicaSetAssociatedDataIsolation
+      priority: 4
+      type: 8
+      is_flaky: 0
+      automation: 2
+    - title: TestReplicaSetAssociatedDataPagination
+      priority: 4
+      type: 8
+      is_flaky: 0
+      automation: 2
+    - title: TestReplicaSetAssociatedDataScaling
+      priority: 4
+      type: 8
+      is_flaky: 0
+      automation: 2
+    - title: TestReplicaSetAssociatedDataStateTransitions
+      priority: 4
+      type: 8
+      is_flaky: 0
+      automation: 2
     - title: TestReplicaSetIncludesAssociatedPods
       priority: 4
       type: 8
@@ -190,6 +215,11 @@
       is_flaky: 0
       automation: 2
     - title: TestIngressArrayFieldExactFilterAndIndexedSort
+      priority: 4
+      type: 8
+      is_flaky: 0
+      automation: 2
+    - title: TestIngressArrayIndexesRefreshAfterUpdate
       priority: 4
       type: 8
       is_flaky: 0
@@ -251,6 +281,11 @@
   suite: Go Automation/Steve/secrets
   cases:
     - title: TestSecretCRUDLifecycle
+      priority: 4
+      type: 8
+      is_flaky: 0
+      automation: 2
+    - title: TestSecretDataRoundTrip
       priority: 4
       type: 8
       is_flaky: 0

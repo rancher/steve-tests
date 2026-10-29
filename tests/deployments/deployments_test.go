@@ -31,23 +31,28 @@ func newDeploymentBody(ns string, name string, labels map[string]string) map[str
 					"app": name,
 				},
 			},
-			"template": map[string]any{
-				"metadata": map[string]any{
-					"labels": map[string]string{
-						"app": name,
-					},
-				},
-				"spec": map[string]any{
-					// Disposable fixtures need no graceful shutdown delay.
-					"terminationGracePeriodSeconds": int64(0),
-					"containers": []map[string]any{
-						{
-							"name":            "main",
-							"image":           actions.WorkloadImage(),
-							"imagePullPolicy": "IfNotPresent",
-							"command":         []string{"sh", "-c", "sleep 3600"},
-						},
-					},
+			"template": newWorkloadPodTemplate(name),
+		},
+	}
+}
+
+// newWorkloadPodTemplate supplies the shared disposable Pod used by workload fixtures.
+func newWorkloadPodTemplate(name string) map[string]any {
+	return map[string]any{
+		"metadata": map[string]any{
+			"labels": map[string]string{
+				"app": name,
+			},
+		},
+		"spec": map[string]any{
+			// Disposable fixtures need no graceful shutdown delay.
+			"terminationGracePeriodSeconds": int64(0),
+			"containers": []map[string]any{
+				{
+					"name":            "main",
+					"image":           actions.WorkloadImage(),
+					"imagePullPolicy": "IfNotPresent",
+					"command":         []string{"sh", "-c", "sleep 3600"},
 				},
 			},
 		},
