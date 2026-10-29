@@ -19,6 +19,7 @@ const (
 	SteveRestartAgeSort             SteveFeature = "Pod restart-age sorting"
 	SteveNamespacedPatch            SteveFeature = "namespaced PATCH namespace fix"
 	SteveReplicaSetAssociatedData   SteveFeature = "ReplicaSet associated Pod data"
+	SteveAdditionalFieldIndexes     SteveFeature = "CRD group, singular name, and resource description indexes"
 	SteveBasicSummary               SteveFeature = "basic SQL summaries"
 	SteveArrayMembershipFilters     SteveFeature = "CONTAINS and NOTCONTAINS filters"
 	StevePodRestartIndexes          SteveFeature = "Pod nested restart indexes"
@@ -54,6 +55,7 @@ var steveFeatureRules = map[SteveFeature]steveFeatureRule{
 	SteveRestartAgeSort:             {minimum: "v0.9.6"},
 	SteveNamespacedPatch:            {minimum: "v0.9.15"},
 	SteveReplicaSetAssociatedData:   {minimum: "v0.10.1"},
+	SteveAdditionalFieldIndexes:     {minimum: "v0.10.8"},
 	SteveBasicSummary:               {minimum: "v0.8.1"},
 	SteveArrayMembershipFilters:     {minimum: "v0.8.18"},
 	StevePodRestartIndexes:          {minimum: "v0.8.15"},
