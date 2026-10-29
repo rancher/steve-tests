@@ -184,6 +184,72 @@ func TestListOptionsEncodeEscapesSteveGrammar(t *testing.T) {
 	}
 }
 
+func TestListOptionsEncodeRejectsInvalidOptionsWithoutPartialQuery(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		options ListOptions
+		wantErr string
+	}{
+		{
+			name:    "valid filter followed by blank expression",
+			options: ListOptions{Filters: []string{"metadata.name=example", "\t\n\u00a0"}},
+			wantErr: "filter expression must not be empty",
+		},
+		{
+			name:    "explicit false summaryonly still requires fields",
+			options: ListOptions{SummaryOnly: Bool(false)},
+			wantErr: "summaryonly requires",
+		},
+		{
+			name:    "explicit false summarynamespaced still requires fields",
+			options: ListOptions{SummaryNamespaced: Bool(false)},
+			wantErr: "summarynamespaced requires",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			encoded, err := test.options.Encode()
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("Encode() error = %v, want substring %q", err, test.wantErr)
+			}
+			if encoded != "" {
+				t.Fatalf("Encode() returned partial query %q for invalid options", encoded)
+			}
+		})
+	}
+}
+
+func TestListOptionsEncodePreservesOpaqueTokensAndRepeatedFilters(t *testing.T) {
+	t.Parallel()
+	filters := []string{
+		Contains("metadata.annotations[note]", "quote\" and slash\\\nnext line"),
+		Equal("metadata.name", "a+b&c=d"),
+	}
+	options := ListOptions{
+		Filters:  filters,
+		Revision: "revision+with/&?=delimiters%20",
+		Continue: "opaque+/==&filter=metadata.name%3Dother#fragment",
+	}
+	encoded, err := options.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.ParseQuery(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := url.Values{
+		FilterParam:   filters,
+		RevisionParam: {options.Revision},
+		ContinueParam: {options.Continue},
+	}
+	if !reflect.DeepEqual(parsed, want) {
+		t.Fatalf("decoded query = %#v, want %#v", parsed, want)
+	}
+}
+
 func TestFilterExpressionHelpers(t *testing.T) {
 	t.Parallel()
 
